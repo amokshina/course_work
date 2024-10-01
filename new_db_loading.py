@@ -106,8 +106,8 @@ class AZSLoaderTemplate(ABC):
 
         return timestamp
     
-    def get_number_of_lines_in_thread(file_path: str, threads: int):
-        with open(file_path, 'r', encoding='utf-8') as f:
+    def get_number_of_lines_in_thread(self, threads: int):
+        with open(self.file_path, 'r', encoding='utf-8') as f:
             file_reader = csv.DictReader(f, fieldnames=self.columns)
             next(file_reader) # пропуск первой строки с названиями колонок
             file_lines = sum(1 for line in file_reader)
@@ -148,23 +148,23 @@ class AZSLoaderTemplate(ABC):
 
     async def _process_file_in_parallel(self, parallel_task: int):
         """Шаблонный метод для параллельной обработки файлов"""
-        lines_per_task = self.get_number_of_lines_in_thread(self.file_path, parallel_task)
+        data_to_insert = self.initialize_data_storage()
+
+        await self.truncate_tables(tables = list(data_to_insert.keys()))
+
+        lines_per_task = self.get_number_of_lines_in_thread(parallel_task)
         tasks = [
-            asyncio.create_task(self._process_lines(start, start + lines_per_task))
+            asyncio.create_task(self._process_lines(start, start + lines_per_task, data_to_insert))
             for start in range(0, parallel_task * lines_per_task, lines_per_task)
         ]
         await asyncio.gather(*tasks)
 
 
-    async def _process_lines(self, start, end):
-        data_to_insert = self.initialize_data_storage()
-
-        await self.truncate_tables(tables = list(data_to_insert.keys()))
-
+    async def _process_lines(self, start, end, data_to_insert):
         async for line in self.read_file_lines(start, end):
             await self.process_line(line, data_to_insert) 
 
-        self.load_data_if_needed(data_to_insert)
+        await self.load_data_if_needed(data_to_insert)
 
     @abstractmethod
     def initialize_data_storage(self):
@@ -196,7 +196,7 @@ class AZSLoaderTemplate(ABC):
     async def load_data(self, schema, table, values):
         attempt = 0
         max_retries = 10
-
+        values = list(values)
         num_columns = len(values[0])
 
         while attempt < max_retries:
@@ -232,13 +232,13 @@ class AZSLoaderTemplate(ABC):
             ''', self.file_name, self.file_path, self.pars_date, self.file_size, self.file_type)
     
     @abstractmethod
-    def close_functions():
+    def close_functions(self):
         pass
 
 
 class AZSInfoLoader(AZSLoaderTemplate):
     def __init__(self, db_params: dict, file_path: str, coordinates_file: str):
-        super().__init__(self, db_params, file_path)
+        super().__init__(db_params, file_path)
 
         self.coordinates_file = coordinates_file
         try:
@@ -296,11 +296,12 @@ class AZSInfoLoader(AZSLoaderTemplate):
             time.sleep(delay)
 
     def coord_to_file(self):
-        with open (coord_file, 'w', encoding='utf-8') as f:  
+        with open (self.coordinates_file, 'w', encoding='utf-8') as f:  
             f.write(json.dumps(self.dict_coord, ensure_ascii=False))
 
     def close_functions(self):
         self.coord_to_file()
+        # ЗДЕСЬ БУДЕТ ВЫЗОВ ФУНКЦИИ ИЗ СКЛ
 
     def initialize_data_storage(self):
         """Инициализация хранилища данных для вставки в БД."""
@@ -432,13 +433,16 @@ class AZSReviewLoader(AZSLoaderTemplate):
                 )
                 
                 data_to_insert['azs_rev_categ'].append((azs_rev_categ.object_id, azs_rev_categ.categ_id, azs_rev_categ.reviews_num, azs_rev_categ.pos_rev_num, azs_rev_categ.neg_rev_num,
-                                                        azs_rev_categ.date_of_pars, azs_rev_categ.file_name_with_ts, azs_rev_categ.src_id))
+                                                        azs_rev_categ.date_of_pars, azs_rev_categ.file_name_with_ts))
 
-                self.data_to_insert['s_azs_categ'].add((s_azs_categ.categ_id, s_azs_categ.title, s_azs_categ.file_name_with_ts, s_azs_categ.src_id)) 
+                data_to_insert['s_azs_categ'].add((s_azs_categ.categ_id, s_azs_categ.title, s_azs_categ.file_name_with_ts)) 
 
         if len(data_to_insert['azs_rev_categ']) > 1000:
             await self.load_data(schema='buffer', table='azs_rev_categ', values=data_to_insert['azs_rev_categ'])               
         
+    def close_functions(self):
+        # ЗДЕСЬ БУДЕТ ВЫЗОВ ФУНКЦИИ ИЗ СКЛ
+        pass 
 
 async def main():
     filename_i = 'C:\\Users\\an23m\\course_work\\data\\info_2024-09-22_22-08-25.csv'
@@ -451,11 +455,11 @@ async def main():
         'host': 'localhost',
         'port': '5432'
     }
-    azs_info_loader = AZSInfoLoader(db_params=db_params, file_path=filename_i, coordinates_file=coord_file)
-    await azs_info_loader.run_insert(parralel_task=10)
+    # azs_info_loader = AZSInfoLoader(db_params=db_params, file_path=filename_i, coordinates_file=coord_file)
+    # await azs_info_loader.run_insert(parallel_task=10)
 
     azs_review_loader = AZSReviewLoader(db_params=db_params, file_path=filename_r)
-    await azs_review_loader.run_insert(parralel_task=10)
+    await azs_review_loader.run_insert(parallel_task=10)
 
 if __name__ == '__main__':
     asyncio.run(main())
