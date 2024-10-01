@@ -1,4 +1,3 @@
-import psycopg2
 from pydantic import BaseModel
 from typing import List, Optional, AsyncIterator
 import json
@@ -8,7 +7,6 @@ import time
 import hashlib
 from datetime import datetime
 import asyncio 
-import aiohttp
 import asyncpg
 import aiofiles
 import aiocsv
@@ -16,6 +14,7 @@ from math import ceil
 import logging
 import  requests
 import os
+from abc import ABC, abstractmethod
 
 
 csv.field_size_limit(10**9)
@@ -40,7 +39,6 @@ class s_AZS_address(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-
 
 class AZS_review(BaseModel):
     object_id: int
@@ -75,27 +73,174 @@ class s_AZS_categ(BaseModel):
     title: str
     file_name_with_ts: Optional[str] = None
 
-class AZS_info_loader():
-    MAX_COUNT = 1000
+class AZSLoaderTemplate(ABC):
     headers =   [ 
                         {'User-Agent': 'Mozilla/5.0 (Linux; Android 8.1.0; 01618) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.105 Safari/537.36'}
                         ,{'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 LikeWise/95.6.3045.46'}
                 ]
 
-    def __init__(self, db_params: dict, file_path: str, coordinates_file: str): 
+    def __init__(self, db_params: dict, file_path: str):
         self.db_params = db_params
-        
-        self.coordinates_file = coordinates_file
-
         self.file_path = file_path
         self.file_name = os.path.basename(file_path)
         self.file_size = os.path.getsize(file_path)
         self.file_type = os.path.splitext(self.file_name)[1][1:]  
-
-        self.pars_date_i = self.get_pars_date(self.file_name)
+        self.pars_date = self.get_pars_date(self.file_name)
         
         self.con_pool = None
 
+        with open(file_path, 'r', encoding='utf-8') as file:
+            # Читаем первую строку как заголовок
+            reader = csv.reader(file)
+            first_row = next(reader)  # Это первая строка из файла
+            self.columns = [col.strip() for col in first_row]  # Преобразуем в список столбцов, убирая лишние пробелы
+
+    @staticmethod
+    def get_pars_date(filename):
+        date_str = filename.split('_')[1]
+        time_str = filename.split('_')[2].split('.')[0]
+
+        datetime_str = f"{date_str} {time_str}"
+
+        timestamp = datetime.strptime(datetime_str, '%Y-%m-%d %H-%M-%S')
+
+        return timestamp
+    
+    def get_number_of_lines_in_thread(file_path: str, threads: int):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            file_reader = csv.DictReader(f, fieldnames=self.columns)
+            next(file_reader) # пропуск первой строки с названиями колонок
+            file_lines = sum(1 for line in file_reader)
+            logging.debug(f"File lines: {file_lines}")
+            return ceil(file_lines/threads)
+
+    async def run_insert(self, parallel_task: int = 10):
+        """Шаблонный метод для выполнения вставки данных"""
+        await self._initialize_db_connection(parallel_task)
+        await self._process_file_in_parallel(parallel_task)
+        await self.insert_file_info()
+        self.close_functions()
+
+    async def _initialize_db_connection(self, parallel_task: int):
+        """Шаг инициализации пула соединений с базой данных"""
+        max_conn_pool = min(50, parallel_task)
+        try:
+            self.con_pool = await asyncpg.create_pool(
+                user=self.db_params['user'],
+                password=self.db_params['password'],
+                database=self.db_params['database'],
+                host=self.db_params['host'],
+                port=self.db_params['port'],
+                min_size=1,
+                max_size=max_conn_pool
+            )
+        except Exception as e:
+            logging.warning(f"Error creating connection pool: {e}")
+
+    async def truncate_tables(self, tables: list, schema: str = 'buffer'):
+        async with self.con_pool.acquire() as conn:
+            for table in tables:
+                try:
+                    print(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
+                    await conn.execute(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
+                except Exception as e:
+                    logging.warning(f"Error with connection or cursor: {e}" )  
+
+    async def _process_file_in_parallel(self, parallel_task: int):
+        """Шаблонный метод для параллельной обработки файлов"""
+        lines_per_task = self.get_number_of_lines_in_thread(self.file_path, parallel_task)
+        tasks = [
+            asyncio.create_task(self._process_lines(start, start + lines_per_task))
+            for start in range(0, parallel_task * lines_per_task, lines_per_task)
+        ]
+        await asyncio.gather(*tasks)
+
+
+    async def _process_lines(self, start, end):
+        data_to_insert = self.initialize_data_storage()
+
+        await self.truncate_tables(tables = list(data_to_insert.keys()))
+
+        async for line in self.read_file_lines(start, end):
+            await self.process_line(line, data_to_insert) 
+
+        self.load_data_if_needed(data_to_insert)
+
+    @abstractmethod
+    def initialize_data_storage(self):
+        """Инициализация хранилища данных. Здесь нужно сделать нормальные названия. В точности как у таблиц""" 
+        pass
+
+    async def read_file_lines(self, start, end) -> AsyncIterator[str]:
+        async with aiofiles.open(self.file_path, 'r', encoding='utf-8') as f:
+            file_reader = aiocsv.AsyncDictReader(f, fieldnames=self.columns)
+            await f.readline() 
+            index = -1
+            async for line in file_reader:
+                index += 1
+                if start<=index<end:
+                    logging.debug(f"read_file_lines start:{start}, end:{end}. index:{index}")
+                    yield line
+
+    @abstractmethod
+    async def process_line(self, line, data_to_insert):
+        pass
+
+    async def load_data_if_needed(self, data_to_insert):
+        for table_name, values in data_to_insert.items():
+            if values:  # Проверяем, есть ли данные для загрузки
+                logging.debug(f"Loading data into {table_name}")
+                await self.load_data(schema='buffer', table=table_name, values=values)
+                values.clear()  # Очистка списка после загрузки (если это необходимо)
+
+    async def load_data(self, schema, table, values):
+        attempt = 0
+        max_retries = 10
+
+        num_columns = len(values[0])
+
+        while attempt < max_retries:
+            try:
+                async with self.con_pool.acquire() as con:
+                    async with con.transaction():
+                       # await con.executemany(query, values)
+                        await con.copy_records_to_table(
+                            table,
+                            schema_name = schema,
+                            records = values
+                        )
+                        values.clear()
+                        logging.debug(f"Data inserted into {schema}.{table}")
+                break  
+
+            except asyncpg.exceptions.DeadlockDetectedError as e:
+                attempt += 1
+                logging.warning(f"Deadlock. Attempt {attempt}. Error: {e}")
+                await asyncio.sleep(1)
+
+            except Exception as ex:
+                logging.warning(f"Exception with load_data: {ex}.  {schema} . {table} ")
+                break 
+
+    async def insert_file_info(self):
+        """Метод для вставки информации о файле в БД"""
+        async with self.con_pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO ctr.reviews_file (file_name, file_path, date_pars, file_size, file_type)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (file_path, file_name) DO NOTHING;
+            ''', self.file_name, self.file_path, self.pars_date, self.file_size, self.file_type)
+    
+    @abstractmethod
+    def close_functions():
+        pass
+
+
+class AZSInfoLoader(AZSLoaderTemplate):
+    def __init__(self, db_params: dict, file_path: str, coordinates_file: str):
+        super().__init__(self, db_params, file_path)
+
+        self.coordinates_file = coordinates_file
         try:
             with open(coordinates_file, 'r', encoding='utf-8' ) as coord_f:
                 try:
@@ -109,21 +254,9 @@ class AZS_info_loader():
             self.dict_coord = {}
 
     @staticmethod
-    def get_pars_date(filename):
-        date_str = filename.split('_')[1]
-        time_str = filename.split('_')[2].split('.')[0]
-
-        datetime_str = f"{date_str} {time_str}"
-
-        timestamp = datetime.strptime(datetime_str, '%Y-%m-%d %H-%M-%S')
-
-        return timestamp
-
-    @staticmethod
     def coordinates_encode(coordinates):
         return hashlib.md5((str(coordinates[0]) + ':' + str(coordinates[1])).encode()).hexdigest()
     
-
     def get_place_by_coordinates(self, coordinates: list[float], retries=20, delay=2):  
         hash_coord = self.coordinates_encode(coordinates)
         try:
@@ -162,52 +295,22 @@ class AZS_info_loader():
             attempt += 1
             time.sleep(delay)
 
-
     def coord_to_file(self):
         with open (coord_file, 'w', encoding='utf-8') as f:  
             f.write(json.dumps(self.dict_coord, ensure_ascii=False))
 
-    async def insert_file_info(self):
-        async with self.con_pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO ctr.reviews_file (file_name, file_path, date_pars, file_size, file_type)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (file_path, file_name) DO NOTHING;
-            ''', self.file_name, self.coordinates_file, self.pars_date_i, self.file_size, self.file_type)
+    def close_functions(self):
+        self.coord_to_file()
 
+    def initialize_data_storage(self):
+        """Инициализация хранилища данных для вставки в БД."""
+        return {
+            'azs_info': [],  # Хранилище для информации об АЗС
+            's_azs_address': []  # Хранилище для адресов
+        }
 
-    async def truncate_tables(self, schema: str, tables: list):
-        async with self.con_pool.acquire() as conn:
-            for table in tables:
-                try:
-                    print(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
-                    await conn.execute(f'TRUNCATE TABLE "{schema}"."{table}" CASCADE')
-                except Exception as e:
-                    logging.warning(f"Error with connection or cursor: {e}" )  
-
-    @staticmethod
-    def get_number_of_lines_in_thread(file_path: str, threads: int):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            columns = ['objectId', 'info']
-            file_reader = csv.DictReader(f, fieldnames=columns)
-            next(file_reader) # пропуск первой строки с названиями колонок
-            file_lines = sum(1 for line in file_reader)
-            logging.debug(f"File lines: {file_lines}")
-            return ceil(file_lines/threads)
-
-    async def read_file_lines(self, start, end) -> AsyncIterator[str]:
-        async with aiofiles.open(self.file_path, 'r', encoding='utf-8') as f:
-            columns = ['objectId', 'info']
-            file_reader = aiocsv.AsyncDictReader(f, fieldnames=columns)
-            await f.readline() 
-            index = -1
-            async for line in file_reader:
-                index += 1
-                if start<=index<end:
-                    logging.debug(f"read_file_lines start:{start}, end:{end}. index:{index}")
-                    yield line
-
-    async def process_line(self, line, data_to_insert_s_AZS_address: list , data_to_insert_AZS_info: list):
+    async def process_line(self, line, data_to_insert):
+        """Обработка строки файла и добавление данных в хранилище."""
         json_data = line.get('info')
         try:
             json_data = json.loads(json_data.strip())
@@ -225,7 +328,7 @@ class AZS_info_loader():
                     address=json_data.get('address', None),
                     region = place.get('state', None), 
                     coordinates = hash_coord,
-                    date_of_pars = self.pars_date_i,
+                    date_of_pars = self.pars_date,
                     filename_with_ts = self.file_name
                     )
                 
@@ -235,16 +338,16 @@ class AZS_info_loader():
                     filename_with_ts = self.file_name
                 )
 
-                data_to_insert_AZS_info.append((azs_info.objectId, azs_info.title, azs_info.rating, azs_info.reviewsCount, azs_info.hoursShortStatus, 
+                data_to_insert['azs_info'].append((azs_info.objectId, azs_info.title, azs_info.rating, azs_info.reviewsCount, azs_info.hoursShortStatus, 
                                                                     azs_info.address, azs_info.region, azs_info.coordinates, azs_info.date_of_pars, azs_info.filename_with_ts))
                     
-                data_to_insert_s_AZS_address.append((s_azs_address.coordinates, s_azs_address.address, s_azs_address.filename_with_ts))
+                data_to_insert['s_azs_address'].append((s_azs_address.coordinates, s_azs_address.address, s_azs_address.filename_with_ts))
 
-                if len(data_to_insert_s_AZS_address) > 1000:
-                    await self.load_data(schema='buffer', table='s_azs_address', values=data_to_insert_s_AZS_address)
+                if len(data_to_insert['s_azs_address']) > 1000:
+                    await self.load_data(schema='buffer', table='s_azs_address', values=data_to_insert['s_azs_address'])
 
-                if len(data_to_insert_AZS_info) > 1000:
-                    await self.load_data(schema='buffer', table='azs_info', values=data_to_insert_AZS_info)
+                if len(data_to_insert['azs_info']) > 1000:
+                    await self.load_data(schema='buffer', table='azs_info', values=data_to_insert['azs_info'])
 
             elif country is None: logging.info(f"COUNTRY IS NONE. {json_data}")
 
@@ -254,95 +357,90 @@ class AZS_info_loader():
         except Exception as ex:
             raise
 
-    async def load_data(self, schema, table, values):
-        attempt = 0
-        max_retries = 10
+class AZSReviewLoader(AZSLoaderTemplate):
+    def initialize_data_storage(self):
+        """Инициализация хранилища данных для вставки в БД."""
+        return {
+            'azs_review': [],
+            's_azs_rev_users': [],
+            's_azs_categ': set(), 
+            'azs_rev_categ': []
+        }
 
-        num_columns = len(values[0])
+    async def process_line(self, line, data_to_insert):
+        """Обработка строки файла и добавление данных в хранилище."""
+        obj_id = line.get('objectId')
+        logging.debug(f"processing line {obj_id}")
+        json_reviews = line.get('reviews')
+        json_reviews = json.loads(json_reviews)  # получили список jsonов который  надо записать в _AZS_review
 
-        # placeholders = ','.join(f'${i+1}' for i in range(num_columns))
-        # query = f"INSERT INTO {schema}.{table} VALUES ({placeholders})"
-
-        while attempt < max_retries:
-            try:
-                async with self.con_pool.acquire() as con:
-                    async with con.transaction():
-                       # await con.executemany(query, values)
-                        await con.copy_records_to_table(
-                            table,
-                            schema_name = schema,
-                            records = values
+        for rev in json_reviews:
+            if rev.get('text'):
+                time = rev.get('time') / 1000 # 1687022256564 - в миллисекундах
+                timestamp = datetime.fromtimestamp(time)
+                try:
+                    azs_review = AZS_review (
+                        object_id = obj_id ,
+                        comment_type = rev.get('type'),
+                        comment_time = timestamp,   
+                        author_id = rev.get('author').get('publicId') if rev.get('author').get('publicId') else '0000',
+                        profession_level_num = rev.get('author').get('professionLevelNum'),
+                        rating = rev.get('rating').get('val', None) if rev.get('rating') else None,
+                        comment_text = rev.get('text'),
+                        likes_num = rev.get('reactions').get('likesCount'),
+                        dislikes_num = rev.get('reactions').get('dislikesCount'),
+                        date_of_pars = self.pars_date,
+                        file_name_with_ts = self.file_name
+                    )
+                    data_to_insert['azs_review'].append((azs_review.object_id, azs_review.comment_type, azs_review.comment_time, azs_review.author_id, azs_review.profession_level_num,
+                                                        azs_review.rating, azs_review.comment_text, azs_review.likes_num, azs_review.dislikes_num, azs_review.date_of_pars, azs_review.file_name_with_ts))
+                    if azs_review.author_id != '0000':
+                        s_azs_rev_user = s_AZS_rev_users(
+                            author_id = rev.get('author').get('publicId'),
+                            author_name = rev.get('author').get('name'),
+                            verified = rev.get('author').get('verified'),
+                            file_name_with_ts = self.file_name
                         )
-                        values.clear()
-                        logging.debug(f"Data inserted into {schema}.{table}")
-                break  
+                        data_to_insert['s_azs_rev_users'].append((s_azs_rev_user.author_id, s_azs_rev_user.author_name, s_azs_rev_user.verified, s_azs_rev_user.file_name_with_ts))
 
-            except asyncpg.exceptions.DeadlockDetectedError as e:
-                attempt += 1
-                logging.warning(f"Deadlock. Attempt {attempt}. Error: {e}")
-                await asyncio.sleep(1)
+                except Exception as e:
+                    logging.warning(e, rev)  
 
-            except Exception as ex:
-                logging.warning(f"Exception with load_data: {ex}.  {schema} . {table} ")
-                break 
+        if len(data_to_insert['azs_review']) > 1000:
+            await self.load_data(schema='buffer', table='azs_review', values=data_to_insert['azs_review'])
+        if len(data_to_insert['s_azs_rev_users']) > 1000:
+            await self.load_data(schema='buffer', table='s_azs_rev_users', values=data_to_insert['s_azs_rev_users'])
+        
+        json_category_stats = line.get('categoryAspectsStats')  # получили список jsonов которые надо записать в s_AZS_categ и AZS_rev_categ 
+        if json_category_stats != 'null':  
+            json_category_stats = json.loads(json_category_stats)
+            for cat in json_category_stats:
+                azs_rev_categ = AZS_rev_categ( 
+                    object_id = obj_id,
+                    categ_id = cat.get('id'),
+                    reviews_num = cat.get('reviewsCount'),
+                    pos_rev_num = cat.get('positiveReviewsCount'),
+                    neg_rev_num = cat.get('negativeReviewsCount'),
+                    date_of_pars = self.pars_date,
+                    file_name_with_ts = self.file_name
+                    )
+                
+                s_azs_categ = s_AZS_categ(
+                    categ_id = cat.get('id'),
+                    title = cat.get('key'),
+                    file_name_with_ts = self.file_name
+                )
+                
+                data_to_insert['azs_rev_categ'].append((azs_rev_categ.object_id, azs_rev_categ.categ_id, azs_rev_categ.reviews_num, azs_rev_categ.pos_rev_num, azs_rev_categ.neg_rev_num,
+                                                        azs_rev_categ.date_of_pars, azs_rev_categ.file_name_with_ts, azs_rev_categ.src_id))
 
-    async def _process_lines(self, start, end):
-        data_to_insert_s_AZS_address = []
-        data_to_insert_AZS_info = []
-        async for line in self.read_file_lines(start, end):
-            await self.process_line(line, data_to_insert_s_AZS_address, data_to_insert_AZS_info) 
-        if data_to_insert_s_AZS_address or data_to_insert_AZS_info:
-            logging.debug(f"call load_data in _process_lines {start}, {end}" )
-            await self.load_data(schema='buffer', table='s_azs_address', values=data_to_insert_s_AZS_address)
-            await self.load_data(schema='buffer', table='azs_info', values=data_to_insert_AZS_info)
+                self.data_to_insert['s_azs_categ'].add((s_azs_categ.categ_id, s_azs_categ.title, s_azs_categ.file_name_with_ts, s_azs_categ.src_id)) 
 
-    async def run_insert(self, parralel_task: int = 10):       
-        max_conn_pool = (50 if parralel_task > 50 else parralel_task)
-        try:
-            self.con_pool = await asyncpg.create_pool(
-                                                    user=self.db_params['user'],
-                                                    password=self.db_params['password'],
-                                                    database=self.db_params['database'],
-                                                    host=self.db_params['host'],
-                                                    port=self.db_params['port'],
-                                                    min_size=1,  
-                                                    max_size=max_conn_pool  
-                                                )
-        except Exception as e:
-            logging.warning(f"Error creating connection pool: {e}")
+        if len(data_to_insert['azs_rev_categ']) > 1000:
+            await self.load_data(schema='buffer', table='azs_rev_categ', values=data_to_insert['azs_rev_categ'])               
+        
 
-        await self.truncate_tables(schema='buffer', tables=['s_azs_address','azs_info'])
-        # self.truncate_tables()
-
-        lines_per_task = AZS_info_loader.get_number_of_lines_in_thread(self.file_path, parralel_task)
-
-        dt_start = datetime.now()
-        lst_task = []
-        for i in range(parralel_task):
-            start = i*lines_per_task
-            end = start + lines_per_task 
-            lst_task.append(asyncio.create_task(self._process_lines(start, end)))
-
-        result = await asyncio.gather(*lst_task, return_exceptions=False)
-
-        await self.insert_file_info()
-
-        self.coord_to_file()
-
-        # try:   # вызов функции sql
-        #     async with self.con_pool.acquire() as con: 
-        #         async with con.transaction():
-        #             await con.execute("select sandbox.fn_load_copy_testing_info()") # ПОМЕНЯТЬ ФУНКЦИЮ
-        #             logging.info('function_call')
-        # except Exception as e:
-        #     logging.warning(f"Error with call func: {e}")
-
-        dt_end = datetime.now()
-        print("---------TIME------------")
-        print('dt_start-', dt_start, 'dt_end-', dt_end)
-
-
-if __name__ == '__main__':
+async def main():
     filename_i = 'C:\\Users\\an23m\\course_work\\data\\info_2024-09-22_22-08-25.csv'
     filename_r = 'C:\\Users\\an23m\\course_work\\data\\reviews_2024-09-22_22-11-48.csv'
     coord_file = 'data\coordinates.json'
@@ -353,5 +451,12 @@ if __name__ == '__main__':
         'host': 'localhost',
         'port': '5432'
     }
-    azs_info_loader = AZS_info_loader(db_params, filename_i, coord_file)
-    asyncio.run(azs_info_loader.run_insert(parralel_task=10))
+    azs_info_loader = AZSInfoLoader(db_params=db_params, file_path=filename_i, coordinates_file=coord_file)
+    await azs_info_loader.run_insert(parralel_task=10)
+
+    azs_review_loader = AZSReviewLoader(db_params=db_params, file_path=filename_r)
+    await azs_review_loader.run_insert(parralel_task=10)
+
+if __name__ == '__main__':
+    asyncio.run(main())
+    
