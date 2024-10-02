@@ -119,7 +119,7 @@ class AZSLoaderTemplate(ABC):
         await self._initialize_db_connection(parallel_task)
         await self._process_file_in_parallel(parallel_task)
         await self.insert_file_info()
-        self.close_functions()
+        await self.close_functions()
 
     async def _initialize_db_connection(self, parallel_task: int):
         """Шаг инициализации пула соединений с базой данных"""
@@ -147,7 +147,6 @@ class AZSLoaderTemplate(ABC):
                     logging.warning(f"Error with connection or cursor: {e}" )  
 
     async def _process_file_in_parallel(self, parallel_task: int):
-        """Шаблонный метод для параллельной обработки файлов"""
         data_to_insert = self.initialize_data_storage()
 
         await self.truncate_tables(tables = list(data_to_insert.keys()))
@@ -232,7 +231,7 @@ class AZSLoaderTemplate(ABC):
             ''', self.file_name, self.file_path, self.pars_date, self.file_size, self.file_type)
     
     @abstractmethod
-    def close_functions(self):
+    async def close_functions(self):
         pass
 
 
@@ -299,9 +298,15 @@ class AZSInfoLoader(AZSLoaderTemplate):
         with open (self.coordinates_file, 'w', encoding='utf-8') as f:  
             f.write(json.dumps(self.dict_coord, ensure_ascii=False))
 
-    def close_functions(self):
+    async def close_functions(self):
         self.coord_to_file()
-        # ЗДЕСЬ БУДЕТ ВЫЗОВ ФУНКЦИИ ИЗ СКЛ
+        try: 
+            with self.con_pool.acquire() as con: 
+                with con.transaction():
+                    con.execute("select testing.fn_load_info()")
+                    logging.info('testing.fn_load_info() called')
+        except Exception as e:
+            logging.warning(f"Error with call func: {e}") 
 
     def initialize_data_storage(self):
         """Инициализация хранилища данных для вставки в БД."""
@@ -440,9 +445,14 @@ class AZSReviewLoader(AZSLoaderTemplate):
         if len(data_to_insert['azs_rev_categ']) > 1000:
             await self.load_data(schema='buffer', table='azs_rev_categ', values=data_to_insert['azs_rev_categ'])               
         
-    def close_functions(self):
-        # ЗДЕСЬ БУДЕТ ВЫЗОВ ФУНКЦИИ ИЗ СКЛ
-        pass 
+    async def close_functions(self):
+        try: 
+            with self.con_pool.acquire() as con: 
+                with con.transaction():
+                    con.execute("select testing.fn_load_reviews()")
+                    print('testing.fn_load_reviews() called')
+        except Exception as e:
+            logging.warning(f"Error with call func: {e}") 
 
 async def main():
     filename_i = 'C:\\Users\\an23m\\course_work\\data\\info_2024-09-22_22-08-25.csv'
