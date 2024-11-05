@@ -195,8 +195,7 @@ class AZSLoaderTemplate(ABC):
     async def load_data(self, schema, table, values):
         attempt = 0
         max_retries = 10
-        values = list(values)
-        num_columns = len(values[0])
+        values_copy = list(values)
 
         while attempt < max_retries:
             try:
@@ -206,7 +205,7 @@ class AZSLoaderTemplate(ABC):
                         await con.copy_records_to_table(
                             table,
                             schema_name = schema,
-                            records = values
+                            records = values_copy
                         )
                         values.clear()
                         logging.debug(f"Data inserted into {schema}.{table}")
@@ -301,9 +300,9 @@ class AZSInfoLoader(AZSLoaderTemplate):
     async def close_functions(self):
         self.coord_to_file()
         try: 
-            with self.con_pool.acquire() as con: 
-                with con.transaction():
-                    con.execute("select testing.fn_load_info()")
+            async with self.con_pool.acquire() as con: 
+                async with con.transaction():
+                    await con.execute("select testing.fn_load_info()")
                     logging.info('testing.fn_load_info() called')
         except Exception as e:
             logging.warning(f"Error with call func: {e}") 
@@ -351,7 +350,7 @@ class AZSInfoLoader(AZSLoaderTemplate):
 
                 if len(data_to_insert['s_azs_address']) > 1000:
                     await self.load_data(schema='buffer', table='s_azs_address', values=data_to_insert['s_azs_address'])
-
+                
                 if len(data_to_insert['azs_info']) > 1000:
                     await self.load_data(schema='buffer', table='azs_info', values=data_to_insert['azs_info'])
 
@@ -414,9 +413,11 @@ class AZSReviewLoader(AZSLoaderTemplate):
 
         if len(data_to_insert['azs_review']) > 1000:
             await self.load_data(schema='buffer', table='azs_review', values=data_to_insert['azs_review'])
+            
         if len(data_to_insert['s_azs_rev_users']) > 1000:
             await self.load_data(schema='buffer', table='s_azs_rev_users', values=data_to_insert['s_azs_rev_users'])
-        
+      
+
         json_category_stats = line.get('categoryAspectsStats')  # получили список jsonов которые надо записать в s_AZS_categ и AZS_rev_categ 
         if json_category_stats != 'null':  
             json_category_stats = json.loads(json_category_stats)
@@ -447,9 +448,9 @@ class AZSReviewLoader(AZSLoaderTemplate):
         
     async def close_functions(self):
         try: 
-            with self.con_pool.acquire() as con: 
-                with con.transaction():
-                    con.execute("select testing.fn_load_reviews()")
+            async with self.con_pool.acquire() as con: 
+                async with con.transaction():
+                    await con.execute("select testing.fn_load_reviews()")
                     print('testing.fn_load_reviews() called')
         except Exception as e:
             logging.warning(f"Error with call func: {e}") 
