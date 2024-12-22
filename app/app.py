@@ -433,6 +433,51 @@ def main():
                 pass
 
             try:
+                # Построение графика
+                fig, ax = plt.subplots(figsize=(12, 8))
+                
+                hourly_sentiment_counts = st.session_state.analyzed_reviews_df.groupby(['hour', 'sentiment_score']).size().unstack(fill_value=0)
+
+                plt.figure(figsize=(10, 6))
+                # Настройки графика
+                plt.title('Распределение отзывов по времени суток по тональности')
+                plt.xlabel('Час')
+                plt.ylabel('Количество отзывов')
+                plt.xticks(range(0, 24, 1))
+                plt.legend(title='Тип отзыва')
+                plt.tight_layout()
+                # Строим линии для разных тональностей
+                sns.lineplot(x=hourly_sentiment_counts.index, y=hourly_sentiment_counts[2], marker='o', label='Положительные', color='green')
+                sns.lineplot(x=hourly_sentiment_counts.index, y=hourly_sentiment_counts[1], marker='o', label='Нейтральные', color='blue')
+                sns.lineplot(x=hourly_sentiment_counts.index, y=hourly_sentiment_counts[0], marker='o', label='Негативные', color='red')
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
+
+            except:
+                pass
+
+            
+            try:
+                # Добавляем колонку с месяцем
+                st.session_state.analyzed_reviews_df['month'] = st.session_state.analyzed_reviews_df['comment_time'].dt.month
+
+                # Группируем по месяцам и считаем количество отзывов
+                monthly_counts = st.session_state.analyzed_reviews_df.groupby('month').size()
+
+                # Построение графика
+                fig, ax = plt.subplots(figsize=(12, 8))
+                sns.barplot(x=monthly_counts.index, y=monthly_counts.values, palette='viridis')
+                plt.title('Количество отзывов по месяцам')
+                plt.xlabel('Месяц')
+                plt.ylabel('Количество отзывов')
+                plt.xticks(range(12), ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'])
+                plt.tight_layout()
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
+            except:
+                pass
+            
+            try:
                 # Группируем по времени, ключевому слову и тональности
                 keyword_sentiment_hour_counts = (
                     exploded_df.groupby(['hour', 'keywords', 'sentiment_score'])
@@ -465,8 +510,7 @@ def main():
                 # Выводим график в Streamlit
                 st.pyplot(fig)
                 st.session_state.figures.append(fig)
-            except Exception as e:
-                print('AAAAAAAAAAAAAAAAAAAaa',e)
+            except:
                 pass
 
             try:
