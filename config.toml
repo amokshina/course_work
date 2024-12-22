@@ -15,3 +15,10 @@ headers = [ "Mozilla/5.0 (Linux; Android 8.1.0; 01618) AppleWebKit/537.36 (KHTML
 
 [filename]
 in_file = "objectIds_2024-09-22_22-08.json"
+
+[db_params]
+user = "postgres"
+password = "f8ysz789"
+database = "azs"
+host = "localhost"
+port = "5432"

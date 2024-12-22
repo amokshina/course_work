@@ -272,138 +272,225 @@ def main():
         if 'figures' not in st.session_state:
             st.session_state.figures = []
 
-        st.subheader("Гистограмма тональности")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        # plt.figure(figsize=(10, 6))
-        sns.countplot(data=st.session_state.analyzed_reviews_df, x='sentiment_score', palette='Set2')
-        plt.title('Распределение тональности отзывов')
-        plt.xlabel('Тональность')
-        plt.ylabel('Количество')
-        st.pyplot(plt)
+        if not st.session_state.figures:
+            try:
+                st.subheader("Гистограмма тональности")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                # plt.figure(figsize=(10, 6))
+                sns.countplot(data=st.session_state.analyzed_reviews_df, x='sentiment_score', palette='Set2')
+                plt.title('Распределение тональности отзывов')
+                plt.xlabel('Тональность')
+                plt.ylabel('Количество')
+                st.pyplot(plt)
 
-        st.session_state.figures.append(fig) # для экспорта
+                st.session_state.figures.append(fig) # для экспорта
+            except:
+                pass
 
-        st.subheader("Частотное распределение тональности по категориям")
-        # Разворачиваем колонку keywords, чтобы каждая категория была в отдельной строке
-        exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
-        sentiment_distribution = exploded_df.groupby(['keywords', 'sentiment_score']).size().unstack(fill_value=0)
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sentiment_distribution.plot(kind='bar', stacked=True, ax=ax)
-        ax.set_title('Распределение отзывов по категориям и тональности')
-        ax.set_xlabel('Категория')
-        ax.set_ylabel('Количество отзывов')
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
-        ax.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
-        plt.tight_layout()
-        st.pyplot(plt) # мб поменять на fig
+            try:
+                st.subheader("Частотное распределение тональности по категориям")
+                # Разворачиваем колонку keywords, чтобы каждая категория была в отдельной строке
+                st.session_state.analyzed_reviews_df['hour'] = st.session_state.analyzed_reviews_df['comment_time'].dt.hour
+                exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
+                sentiment_distribution = exploded_df.groupby(['keywords', 'sentiment_score']).size().unstack(fill_value=0)
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sentiment_distribution.plot(kind='bar', stacked=True, ax=ax)
+                ax.set_title('Распределение отзывов по категориям и тональности')
+                ax.set_xlabel('Категория')
+                ax.set_ylabel('Количество отзывов')
+                ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+                ax.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+                plt.tight_layout()
+                st.pyplot(plt) # мб поменять на fig
 
-        st.session_state.figures.append(fig)
+                st.session_state.figures.append(fig)
 
-        st.subheader("Распределение отзывов по категориям и тональности в процентном соотношении")
-        sentiment_distribution_percent = sentiment_distribution.div(sentiment_distribution.sum(axis=1), axis=0) * 100
+            except:
+                pass
 
-        # Построение графика
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sentiment_distribution_percent.plot(kind='bar', stacked=True, ax=ax)
-        plt.title('Распределение отзывов по категориям и тональности в процентном соотношении')
-        plt.xlabel('Категория')
-        plt.ylabel('Процент отзывов')
-        plt.xticks(rotation=90)
-        plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
-        plt.tight_layout()
-        st.pyplot(plt)
+            try:
+                st.subheader("Распределение отзывов по категориям и тональности в процентном соотношении")
+                sentiment_distribution_percent = sentiment_distribution.div(sentiment_distribution.sum(axis=1), axis=0) * 100
 
-        st.session_state.figures.append(fig)
-# можно например добавить результаты о том какое количество положительных и отрицательных отзывов для каждой азс. какие категории наилучшие и наихудшие для каждой азс.
-        
-        st.subheader("Распределение тональности по регионам")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.countplot(data=st.session_state.analyzed_reviews_df, x='region', hue='sentiment_score', palette='coolwarm')
-        plt.title("Распределение тональности по регионам")
-        plt.xlabel("Регион")
-        plt.xticks(rotation=90)
-        plt.ylabel("Количество отзывов")
-        st.pyplot(plt)
-        st.session_state.figures.append(fig)
+                # Построение графика
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sentiment_distribution_percent.plot(kind='bar', stacked=True, ax=ax)
+                plt.title('Распределение отзывов по категориям и тональности в процентном соотношении')
+                plt.xlabel('Категория')
+                plt.ylabel('Процент отзывов')
+                plt.xticks(rotation=90)
+                plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+                plt.tight_layout()
+                st.pyplot(plt)
 
-        st.subheader("Распределение тональности по регионам (в процентах)")
-        # Вычисляем количество отзывов по каждому региону и тональности
-        region_sentiment_counts = st.session_state.analyzed_reviews_df.groupby(['region', 'sentiment_score']).size().unstack(fill_value=0)
+                st.session_state.figures.append(fig)
 
-        # Преобразуем количество в проценты для каждого региона
-        region_sentiment_percent = region_sentiment_counts.div(region_sentiment_counts.sum(axis=1), axis=0) * 100
+            except:
+                pass
+    # можно например добавить результаты о том какое количество положительных и отрицательных отзывов для каждой азс. какие категории наилучшие и наихудшие для каждой азс.
+            try:
+                st.subheader("Распределение тональности по регионам")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.countplot(data=st.session_state.analyzed_reviews_df, x='region', hue='sentiment_score', palette='coolwarm')
+                plt.title("Распределение тональности по регионам")
+                plt.xlabel("Регион")
+                plt.xticks(rotation=90)
+                plt.ylabel("Количество отзывов")
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
+            except:
+                pass
+            
+            try:
+                st.subheader("Распределение тональности по регионам (в процентах)")
+                # Вычисляем количество отзывов по каждому региону и тональности
+                region_sentiment_counts = st.session_state.analyzed_reviews_df.groupby(['region', 'sentiment_score']).size().unstack(fill_value=0)
 
-        # Сортируем регионы по проценту положительных отзывов (предполагаем, что положительная тональность = 1)
-        region_sentiment_percent = region_sentiment_percent.sort_values(by=0, ascending=False)
+                # Преобразуем количество в проценты для каждого региона
+                region_sentiment_percent = region_sentiment_counts.div(region_sentiment_counts.sum(axis=1), axis=0) * 100
 
-        # Преобразуем данные для построения графика в нужном формате
-        region_sentiment_percent = region_sentiment_percent.reset_index().melt(id_vars='region', var_name='sentiment_score', value_name='percentage')
+                # Сортируем регионы по проценту положительных отзывов (предполагаем, что положительная тональность = 1)
+                region_sentiment_percent = region_sentiment_percent.sort_values(by=0, ascending=False)
 
-        # Построение графика с процентами
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(data=region_sentiment_percent, x='region', y='percentage', hue='sentiment_score', palette='coolwarm')
-        plt.title("Распределение тональности по регионам (в процентах)")
-        plt.xlabel("Регион")
-        plt.ylabel("Процент отзывов")
-        plt.xticks(rotation=90)
-        # plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
-        plt.tight_layout()
-        st.pyplot(plt)
-        st.session_state.figures.append(fig)
+                # Преобразуем данные для построения графика в нужном формате
+                region_sentiment_percent = region_sentiment_percent.reset_index().melt(id_vars='region', var_name='sentiment_score', value_name='percentage')
 
-        # review_counts с информацией о количестве отзывов и проценте негативных отзывов для каждой АЗС
+                # Построение графика с процентами
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(data=region_sentiment_percent, x='region', y='percentage', hue='sentiment_score', palette='coolwarm')
+                plt.title("Распределение тональности по регионам (в процентах)")
+                plt.xlabel("Регион")
+                plt.ylabel("Процент отзывов")
+                plt.xticks(rotation=90)
+                # plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+                plt.tight_layout()
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
 
-        review_counts = st.session_state.analyzed_reviews_df.groupby('object_id').agg(
-        total_reviews=('sentiment_score', 'size'),
-        negative_reviews=('sentiment_score', lambda x: (x == 0).sum()),
-        neutral_reviews=('sentiment_score', lambda x: (x == 1).sum()),
-        positive_reviews=('sentiment_score', lambda x: (x == 2).sum()),
-        ).reset_index()
+            except:
+                pass
+            # review_counts с информацией о количестве отзывов и проценте негативных отзывов для каждой АЗС
+            try:
+                review_counts = st.session_state.analyzed_reviews_df.groupby('object_id').agg(
+                total_reviews=('sentiment_score', 'size'),
+                negative_reviews=('sentiment_score', lambda x: (x == 0).sum()),
+                neutral_reviews=('sentiment_score', lambda x: (x == 1).sum()),
+                positive_reviews=('sentiment_score', lambda x: (x == 2).sum()),
+                ).reset_index()
 
-        # Фильтруем только те АЗС, где общее количество отзывов больше или равно 20
-        review_counts = review_counts[review_counts['total_reviews'] >= 20]
+                # Фильтруем только те АЗС, где общее количество отзывов больше или равно 20
+                review_counts = review_counts[review_counts['total_reviews'] >= 20]
 
-        # Вычисляем процент отзывов для каждой АЗС
-        review_counts['negative_ratio'] = review_counts['negative_reviews'] / review_counts['total_reviews'] * 100
-        review_counts['neutral_ratio'] = review_counts['neutral_reviews'] / review_counts['total_reviews'] * 100
-        review_counts['positive_ratio'] = review_counts['positive_reviews'] / review_counts['total_reviews'] * 100
+                # Вычисляем процент отзывов для каждой АЗС
+                review_counts['negative_ratio'] = review_counts['negative_reviews'] / review_counts['total_reviews'] * 100
+                review_counts['neutral_ratio'] = review_counts['neutral_reviews'] / review_counts['total_reviews'] * 100
+                review_counts['positive_ratio'] = review_counts['positive_reviews'] / review_counts['total_reviews'] * 100
+
+            except:
+                pass
+
+            try:
+                st.subheader("Список АЗС с наибольшим количеством негативных отзывов")
+                # Сортируем по проценту негативных отзывов в порядке убывания
+                top_negative = review_counts.sort_values(by='negative_ratio', ascending=False).head(20).reset_index()
+                
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(data=top_negative, x='object_id', y='negative_ratio', order=top_negative['object_id'])
+                plt.title("Топ-20 АЗС с наибольшим процентом негативных отзывов")
+                plt.xlabel("АЗС ID")
+                plt.xticks(rotation=90)
+                plt.ylabel("Процент негативных отзывов")
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
+                st.text(top_negative)
+            except: pass
 
 
-        st.subheader("Список АЗС с наибольшим количеством негативных отзывов")
-        # Сортируем по проценту негативных отзывов в порядке убывания
-        top_negative = review_counts.sort_values(by='negative_ratio', ascending=False).head(20).reset_index()
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(data=top_negative, x='object_id', y='negative_ratio', order=top_negative['object_id'])
-        plt.title("Топ-20 АЗС с наибольшим процентом негативных отзывов")
-        plt.xlabel("АЗС ID")
-        plt.xticks(rotation=90)
-        plt.ylabel("Процент негативных отзывов")
-        st.pyplot(plt)
-        st.session_state.figures.append(fig)
-        st.text(top_negative)
+            try:
+                # Получаем отзывы с негативным sentiment_score
+                exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
+                negative_reviews = exploded_df[exploded_df['sentiment_score'] == 0]
 
-        # Получаем отзывы с негативным sentiment_score
-        exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
-        negative_reviews = exploded_df[exploded_df['sentiment_score'] == 0]
+                # Группируем по 'object_id' и 'keywords', чтобы посчитать количество негативных отзывов по категориям
+                category_counts = negative_reviews.groupby(['object_id', 'keywords']).size().unstack().fillna(0)
 
-        # Группируем по 'object_id' и 'keywords', чтобы посчитать количество негативных отзывов по категориям
-        category_counts = negative_reviews.groupby(['object_id', 'keywords']).size().unstack().fillna(0)
+                # Фильтруем category_counts по top_negative, чтобы оставить только те АЗС, которые есть в top_negative
+                filtered_category_counts = category_counts.loc[category_counts.index.isin(top_negative['object_id'])]
 
-        # Фильтруем category_counts по top_negative, чтобы оставить только те АЗС, которые есть в top_negative
-        filtered_category_counts = category_counts.loc[category_counts.index.isin(top_negative['object_id'])]
+                # Строим тепловую карту
+                fig, ax = plt.subplots(figsize=(12, 8))
+                sns.heatmap(filtered_category_counts, annot=True, cmap='Reds', fmt='g', linewidths=0.5)
+                plt.title("Тепловая карта: Негативные отзывы по категориям для топ-20 АЗС")
+                plt.xlabel("Категория")
+                plt.ylabel("АЗС ID")
+                plt.xticks(rotation=90)
+                plt.tight_layout()
+                st.pyplot(plt)
+                st.session_state.figures.append(fig)
 
-        # Строим тепловую карту
-        fig, ax = plt.subplots(figsize=(12, 8))
-        sns.heatmap(filtered_category_counts, annot=True, cmap='Reds', fmt='g', linewidths=0.5)
-        plt.title("Тепловая карта: Негативные отзывы по категориям для топ-20 АЗС")
-        plt.xlabel("Категория")
-        plt.ylabel("АЗС ID")
-        plt.xticks(rotation=90)
-        plt.tight_layout()
-        st.pyplot(plt)
-        st.session_state.figures.append(fig)
+            except: 
+                pass
+
+            try:
+                # Группируем по времени, ключевому слову и тональности
+                keyword_sentiment_hour_counts = (
+                    exploded_df.groupby(['hour', 'keywords', 'sentiment_score'])
+                    .size()
+                    .unstack(fill_value=0)
+                )
+
+                # Определяем уникальные ключевые слова
+                keywords = keyword_sentiment_hour_counts.index.get_level_values('keywords').unique()
+
+                # Создаем несколько подграфиков (по одному для каждого ключевого слова)
+                fig, axes = plt.subplots(len(keywords), 1, figsize=(14, len(keywords) * 5))
+
+                # Если только один подграфик, axes будет не массивом, а объектом, так что сделаем проверку
+                if len(keywords) == 1:
+                    axes = [axes]
+
+                for i, keyword in enumerate(keywords):
+                    # Фильтруем данные по ключевому слову
+                    data = keyword_sentiment_hour_counts.xs(keyword, level='keywords')
+                    
+                    # Строим график для каждого ключевого слова
+                    data.plot(kind='bar', stacked=True, ax=axes[i], colormap='coolwarm', width=0.8)
+                    
+                    axes[i].set_title(f'Тональность отзывов для "{keyword}"', fontsize=14)
+                    axes[i].set_xlabel('Час дня', fontsize=12)
+                    axes[i].set_ylabel('Частота', fontsize=12)
+                    axes[i].legend(title='Тональность', fontsize=10)
+
+                # Выводим график в Streamlit
+                st.pyplot(fig)
+                st.session_state.figures.append(fig)
+            except Exception as e:
+                print('AAAAAAAAAAAAAAAAAAAaa',e)
+                pass
+
+            try:
+                keyword_sentiment = exploded_df.groupby('keywords').agg(
+                    avg_sentiment=('sentiment_score', 'mean'),
+                    review_count=('sentiment_score', 'count')
+                ).reset_index()
+
+                fig, ax = plt.subplots(figsize=(10, 6))
+                plt.scatter(keyword_sentiment['keywords'], keyword_sentiment['avg_sentiment'], s=keyword_sentiment['review_count']*0.1, alpha=0.7)
+                plt.title('Тональность и количество отзывов по категориям')
+                plt.xlabel('Ключевое слово')
+                plt.ylabel('Средняя тональность')
+                plt.xticks(rotation=90)
+
+                st.pyplot(fig)
+                st.session_state.figures.append(fig)
+
+            except:
+                pass
+
+        else:
+             for fig in st.session_state.figures:
+                st.pyplot(fig)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         pdf_filename = f"reports\\review_report_{timestamp}.pdf"
@@ -418,26 +505,6 @@ def main():
 if __name__ == "__main__":
     main()
             
-
-# st.subheader("Облако слов")
-            
-# positive_reviews = ' '.join(st.session_state.analyzed_reviews_df[st.session_state.analyzed_reviews_df['sentiment_score'] == 2]['clean_text']).replace('[','').replace("'",'').replace(',','').replace(']','')
-# wordcloud = WordCloud(width=800, height=400, background_color='white').generate(positive_reviews)
-
-# plt.figure(figsize=(10, 5))
-# plt.imshow(wordcloud, interpolation='bilinear')
-# plt.axis("off")
-# plt.title("Облако слов для положительных отзывов")
-# st.pyplot(plt)
-
-# negative_reviews = ' '.join(st.session_state.analyzed_reviews_df[st.session_state.analyzed_reviews_df['sentiment_score'] == 0]['clean_text']).replace('[','').replace("'",'').replace(',','').replace(']','')
-# wordcloud = WordCloud(width=800, height=400, background_color='white').generate(negative_reviews)
-
-# plt.figure(figsize=(10, 5))
-# plt.imshow(wordcloud, interpolation='bilinear')
-# plt.axis("off")
-# plt.title("Облако слов для негативных отзывов")
-# st.pyplot(plt)
 
 # def analyze_sentiment_by_azs(reviews_df):
 #     # Группируем по АЗС и тональности
@@ -463,35 +530,3 @@ if __name__ == "__main__":
 #     plt.legend(title='Тональность')
 #     plt.tight_layout()
 #     st.pyplot(plt)
-
-# def main():
-#     st.title("Анализ отзывов")
-
-#     # Проверка, были ли уже проанализированы отзывы
-#     if 'analysis_done' not in st.session_state:
-#         st.session_state.analysis_done = False
-
-#     if st.button("Анализировать все отзывы"):
-#         # Инициализация классов
-#         with st.spinner("Идет анализ отзывов..."):
-#             analyze_reviews(st.session_state.analyzed_reviews_df, preprocessor, vectorizer, sentiment_analyzer, st.session_state.keyword_extractor)
-#             st.session_state.analysis_done = True
-
-#     # Отображение результатов анализа
-#     if st.session_state.analysis_done:
-#         st.subheader("Результаты анализа")
-#         st.dataframe(st.session_state.analyzed_reviews_df[['comment_text', 'cleaned_text', 'sentiment', 'keywords']].head(100))
-
-#         # Анализ отзывов по АЗС
-#         sentiment_counts = analyze_sentiment_by_azs(st.session_state.analyzed_reviews_df)
-#         best_worst_categories, category_sentiment_counts = analyze_best_worst_categories(st.session_state.analyzed_reviews_df)
-
-#         st.subheader("Количество положительных и отрицательных отзывов по АЗС")
-#         st.dataframe(sentiment_counts)
-
-#         st.subheader("Наилучшие и наихудшие категории для каждой АЗС")
-#         st.dataframe(best_worst_categories)
-
-#         st.subheader("График распределения отзывов по АЗС")
-#         plot_sentiment_distribution_by_azs(sentiment_counts)
-
