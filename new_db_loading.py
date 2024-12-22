@@ -15,6 +15,7 @@ import logging
 import  requests
 import os
 from abc import ABC, abstractmethod
+import toml
 
 
 csv.field_size_limit(10**9)
@@ -459,15 +460,18 @@ async def main():
     filename_i = 'C:\\Users\\an23m\\course_work\\data\\info_2024-09-22_22-08-25.csv'
     filename_r = 'C:\\Users\\an23m\\course_work\\data\\reviews_2024-09-22_22-11-48.csv'
     coord_file = 'data\coordinates.json'
+    config = toml.load('config.toml')
+
+    # Извлечение данных из секции db_params
     db_params = {
-        'user': 'postgres',
-        'password': 'f8ysz789',
-        'database': 'azs',
-        'host': 'localhost',
-        'port': '5432'
+        'user': config['db_params']['user'],
+        'password': config['db_params']['password'],
+        'database': config['db_params']['database'],
+        'host': config['db_params']['host'],
+        'port': config['db_params']['port']
     }
-    # azs_info_loader = AZSInfoLoader(db_params=db_params, file_path=filename_i, coordinates_file=coord_file)
-    # await azs_info_loader.run_insert(parallel_task=10)
+    azs_info_loader = AZSInfoLoader(db_params=db_params, file_path=filename_i, coordinates_file=coord_file)
+    await azs_info_loader.run_insert(parallel_task=10)
 
     azs_review_loader = AZSReviewLoader(db_params=db_params, file_path=filename_r)
     await azs_review_loader.run_insert(parallel_task=10)
