@@ -112,7 +112,7 @@ protobuf==4.25.3
 psutil @ file:///C:/ci_311_rebuilds/psutil_1679005906571/work
 psycopg2 @ file:///D:/bld/psycopg2-split_1727892670188/work
 pure-eval @ file:///opt/conda/conda-bld/pure_eval_1646925070566/work
-pyarrow==17.0.0
+pyarrow==14.0.1
 pyaspeller==2.0.0
 pycparser @ file:///home/conda/feedstock_root/build_artifacts/pycparser_1711811537435/work
 pydantic @ file:///home/conda/feedstock_root/build_artifacts/pydantic_1726601062926/work
