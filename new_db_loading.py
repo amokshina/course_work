@@ -106,7 +106,7 @@ class AZSLoaderTemplate(ABC):
 
         return timestamp
     
-    def get_number_of_lines_in_thread(self, threads: int):
+    def _get_number_of_lines_in_thread(self, threads: int):
         with open(self.file_path, 'r', encoding='utf-8') as f:
             file_reader = csv.DictReader(f, fieldnames=self.columns)
             next(file_reader) # пропуск первой строки с названиями колонок
@@ -116,12 +116,12 @@ class AZSLoaderTemplate(ABC):
 
     async def run_insert(self, parallel_task: int = 10):
         """Шаблонный метод для выполнения вставки данных"""
-        await self._initialize_db_connection(parallel_task)
-        await self._process_file_in_parallel(parallel_task)
-        await self.insert_file_info()
-        await self.close_functions()
+        await self.__initialize_db_connection(parallel_task)
+        await self.__process_file_in_parallel(parallel_task)
+        await self.__insert_file_info()
+        await self._close_functions()
 
-    async def _initialize_db_connection(self, parallel_task: int):
+    async def __initialize_db_connection(self, parallel_task: int):
         """Шаг инициализации пула соединений с базой данных"""
         max_conn_pool = min(50, parallel_task)
         try:
@@ -137,7 +137,7 @@ class AZSLoaderTemplate(ABC):
         except Exception as e:
             logging.warning(f"Error creating connection pool: {e}")
 
-    async def truncate_tables(self, tables: list, schema: str = 'buffer'):
+    async def _truncate_tables(self, tables: list, schema: str = 'buffer'):
         async with self.con_pool.acquire() as conn:
             for table in tables:
                 try:
@@ -146,24 +146,24 @@ class AZSLoaderTemplate(ABC):
                 except Exception as e:
                     logging.warning(f"Error with connection or cursor: {e}" )  
 
-    async def _process_file_in_parallel(self, parallel_task: int):
+    async def __process_file_in_parallel(self, parallel_task: int):
         data_to_insert = self.initialize_data_storage()
 
-        await self.truncate_tables(tables = list(data_to_insert.keys()))
+        await self._truncate_tables(tables = list(data_to_insert.keys()))
 
-        lines_per_task = self.get_number_of_lines_in_thread(parallel_task)
+        lines_per_task = self._get_number_of_lines_in_thread(parallel_task)
         tasks = [
-            asyncio.create_task(self._process_lines(start, start + lines_per_task, data_to_insert))
+            asyncio.create_task(self.__process_lines(start, start + lines_per_task, data_to_insert))
             for start in range(0, parallel_task * lines_per_task, lines_per_task)
         ]
         await asyncio.gather(*tasks)
 
 
-    async def _process_lines(self, start, end, data_to_insert):
+    async def __process_lines(self, start, end, data_to_insert):
         async for line in self.read_file_lines(start, end):
-            await self.process_line(line, data_to_insert) 
+            await self._process_line(line, data_to_insert) 
 
-        await self.load_data_if_needed(data_to_insert)
+        await self.__load_data_if_needed(data_to_insert)
 
     @abstractmethod
     def initialize_data_storage(self):
@@ -182,17 +182,17 @@ class AZSLoaderTemplate(ABC):
                     yield line
 
     @abstractmethod
-    async def process_line(self, line, data_to_insert):
+    async def _process_line(self, line, data_to_insert):
         pass
 
-    async def load_data_if_needed(self, data_to_insert):
+    async def __load_data_if_needed(self, data_to_insert):
         for table_name, values in data_to_insert.items():
             if values:  # Проверяем, есть ли данные для загрузки
                 logging.debug(f"Loading data into {table_name}")
-                await self.load_data(schema='buffer', table=table_name, values=values)
+                await self._load_data(schema='buffer', table=table_name, values=values)
                 values.clear()  # Очистка списка после загрузки (если это необходимо)
 
-    async def load_data(self, schema, table, values):
+    async def _load_data(self, schema, table, values):
         attempt = 0
         max_retries = 10
         values_copy = list(values)
@@ -217,10 +217,10 @@ class AZSLoaderTemplate(ABC):
                 await asyncio.sleep(1)
 
             except Exception as ex:
-                logging.warning(f"Exception with load_data: {ex}.  {schema} . {table} ")
+                logging.warning(f"Exception with _load_data: {ex}.  {schema} . {table} ")
                 break 
 
-    async def insert_file_info(self):
+    async def __insert_file_info(self):
         """Метод для вставки информации о файле в БД"""
         async with self.con_pool.acquire() as conn:
             await conn.execute('''
@@ -230,7 +230,7 @@ class AZSLoaderTemplate(ABC):
             ''', self.file_name, self.file_path, self.pars_date, self.file_size, self.file_type)
     
     @abstractmethod
-    async def close_functions(self):
+    async def _close_functions(self):
         pass
 
 
@@ -297,7 +297,7 @@ class AZSInfoLoader(AZSLoaderTemplate):
         with open (self.coordinates_file, 'w', encoding='utf-8') as f:  
             f.write(json.dumps(self.dict_coord, ensure_ascii=False))
 
-    async def close_functions(self):
+    async def _close_functions(self):
         self.coord_to_file()
         try: 
             async with self.con_pool.acquire() as con: 
@@ -314,7 +314,7 @@ class AZSInfoLoader(AZSLoaderTemplate):
             's_azs_address': []  # Хранилище для адресов
         }
 
-    async def process_line(self, line, data_to_insert):
+    async def _process_line(self, line, data_to_insert):
         """Обработка строки файла и добавление данных в хранилище."""
         json_data = line.get('info')
         try:
@@ -349,10 +349,10 @@ class AZSInfoLoader(AZSLoaderTemplate):
                 data_to_insert['s_azs_address'].append((s_azs_address.coordinates, s_azs_address.address, s_azs_address.filename_with_ts))
 
                 if len(data_to_insert['s_azs_address']) > 1000:
-                    await self.load_data(schema='buffer', table='s_azs_address', values=data_to_insert['s_azs_address'])
+                    await self._load_data(schema='buffer', table='s_azs_address', values=data_to_insert['s_azs_address'])
                 
                 if len(data_to_insert['azs_info']) > 1000:
-                    await self.load_data(schema='buffer', table='azs_info', values=data_to_insert['azs_info'])
+                    await self._load_data(schema='buffer', table='azs_info', values=data_to_insert['azs_info'])
 
             elif country is None: logging.info(f"COUNTRY IS NONE. {json_data}")
 
@@ -372,7 +372,7 @@ class AZSReviewLoader(AZSLoaderTemplate):
             'azs_rev_categ': []
         }
 
-    async def process_line(self, line, data_to_insert):
+    async def _process_line(self, line, data_to_insert):
         """Обработка строки файла и добавление данных в хранилище."""
         obj_id = line.get('objectId')
         logging.debug(f"processing line {obj_id}")
@@ -412,10 +412,10 @@ class AZSReviewLoader(AZSLoaderTemplate):
                     logging.warning(e, rev)  
 
         if len(data_to_insert['azs_review']) > 1000:
-            await self.load_data(schema='buffer', table='azs_review', values=data_to_insert['azs_review'])
+            await self._load_data(schema='buffer', table='azs_review', values=data_to_insert['azs_review'])
             
         if len(data_to_insert['s_azs_rev_users']) > 1000:
-            await self.load_data(schema='buffer', table='s_azs_rev_users', values=data_to_insert['s_azs_rev_users'])
+            await self._load_data(schema='buffer', table='s_azs_rev_users', values=data_to_insert['s_azs_rev_users'])
       
 
         json_category_stats = line.get('categoryAspectsStats')  # получили список jsonов которые надо записать в s_AZS_categ и AZS_rev_categ 
@@ -444,9 +444,9 @@ class AZSReviewLoader(AZSLoaderTemplate):
                 data_to_insert['s_azs_categ'].add((s_azs_categ.categ_id, s_azs_categ.title, s_azs_categ.file_name_with_ts)) 
 
         if len(data_to_insert['azs_rev_categ']) > 1000:
-            await self.load_data(schema='buffer', table='azs_rev_categ', values=data_to_insert['azs_rev_categ'])               
+            await self._load_data(schema='buffer', table='azs_rev_categ', values=data_to_insert['azs_rev_categ'])               
         
-    async def close_functions(self):
+    async def _close_functions(self):
         try: 
             async with self.con_pool.acquire() as con: 
                 async with con.transaction():

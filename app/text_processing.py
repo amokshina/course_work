@@ -175,7 +175,7 @@ class KeywordExtractor:
         
     def match_review_to_themes(self, review_vector):
         matched_themes = []
-        review_vector_mean = np.mean(review_vector, axis=0)
+        #review_vector_mean = np.mean(review_vector, axis=0)
         review_vector_mean = np.mean(review_vector, axis=0).reshape(1, -1)
         for theme, theme_vector in self.expanded_keywords_vectors.items():
             similarity = cosine_similarity(review_vector_mean, theme_vector.reshape(1, -1))[0][0]

@@ -1,21 +1,28 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-# Импортируйте ваши классы
-from text_processing import Preprocessor, Vectorizer, SentimentAnalyzer, KeywordExtractor
+from text_processing import Preprocessor, Vectorizer, SentimentAnalyzer, KeywordExtractor # мои классы
 from nltk.corpus import stopwords
 import time
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import joblib
-import json
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import seaborn as sns
+import logging
+import ast
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
+from datetime import datetime
+import hashlib
 
-sentiment_model = joblib.load("C:\\Users\\an23m\\course_work\\svm_model.pkl")
+
+logging.basicConfig(level=logging.INFO) 
+
+sentiment_model = joblib.load("C:\\Users\\an23m\\course_work\\app\\model\\svm_model.pkl")
 # Загрузка сохраненного словаря с векторами
-combined_vectors_array = np.load("C:\\Users\\an23m\\course_work\\combined_vectors.npy", allow_pickle=True).item()
+combined_vectors_array = np.load("C:\\Users\\an23m\\course_work\\app\\model\\combined_vectors.npy", allow_pickle=True).item()
 
 stop_words = set(stopwords.words('russian'))
 words_to_remove = {'не', 'всегда', 'лучше', 'никогда', 'хорошо', 'нет', 'нельзя', 'можно'}
@@ -41,242 +48,396 @@ abbreviations = {
     "плз": "пожалуйста"
 }
 
+def md5(text):
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
 def get_db_connection_params():
-    st.subheader("Параметры подключения к базе данных")
     db_host = st.text_input("Хост базы данных", "localhost")
     db_name = st.text_input("Имя базы данных", "azs")
     db_user = st.text_input("Пользователь базы данных", "postgres")
     db_password = st.text_input("Пароль базы данных", "f8ysz789", type="password")
     return db_host, db_name, db_user, db_password
 
-def get_reviews(db_host, db_name, db_user, db_password):
-    # Установка соединения с базой данных
-    conn = psycopg2.connect(
-        host=db_host,
-        database=db_name,
-        user=db_user,
-        password=db_password
-    )
-    cur = conn.cursor()
 
-    df = pd.read_sql_query("SELECT * FROM testing.azs_review order by object_id", conn) # убрать лимит
-
-    cur.close()
-    conn.close()
-    return df
+def get_unprocessed_reviews(db_host, db_name, db_user, db_password):
+    try:
+        with psycopg2.connect(
+            host=db_host,
+            database=db_name,
+            user=db_user,
+            password=db_password
+            ) as conn:
+            with conn.cursor() as cursor: 
+                df = pd.read_sql_query("""select ar.comment_text from testing.azs_review ar 
+                left join testing.azs_review_analysis AS a 
+                on md5(ar.comment_text) = a.review_hash
+                where ar.date_of_pars = (select max(date_of_pars) from testing.azs_review) and a.review_hash is null""", conn) 
+                st.session_state.db_connection = True
+                return df
+            
+    except Exception as e:
+        st.error("Не удалось установить соединение с базой данных. Проверьте параметры подключения.")
+        st.session_state.db_connection = False
+        logging.warning(f"Error with connection or cursor: {e}" )
+        return pd.DataFrame() 
+    
+def parse_string_to_list(string_value):
+    # Если значение уже является списком, просто возвращаем его
+    if isinstance(string_value, list):
+        return string_value
+    # Если это строка, пытаемся преобразовать её в список
+    elif isinstance(string_value, str):
+        try:
+            return ast.literal_eval(string_value) if string_value else []
+        except (ValueError, SyntaxError):
+            return []  # Возвращаем пустой список, если не удается преобразовать строку
+    return []
 
 def get_keywords(db_host, db_name, db_user, db_password):
-    conn = psycopg2.connect(
-        host=db_host,
-        database=db_name,
-        user=db_user,
-        password=db_password
-    )
-    cur = conn.cursor()
-
-    themes = pd.read_sql_query("select title from testing.s_azs_categ order by title", conn)
-
-    cur.close()
-    conn.close()
-    keywords = themes['title'].tolist()
-    return keywords
+    try:
+        with psycopg2.connect(
+            host=db_host,
+            database=db_name,
+            user=db_user,
+            password=db_password
+            ) as conn:
+            with conn.cursor() as cursor: 
+                themes = pd.read_sql_query("select title from testing.s_azs_categ order by title", conn)
+                keywords = themes['title'].tolist()
+                #cursor.execute(query=)   
+                return keywords
+    except Exception as e:
+        logging.warning(f"Error with connection or cursor: {e}" )
+        return []
 
 def analyze_reviews(df, preprocessor, vectorizer, sentiment_analyzer, keyword_extractor):
     # Проверка и создание столбца 'cleaned_text'
-    if 'cleaned_text' not in df.columns:
+    if 'clean_text' not in df.columns:
         texts = df['comment_text'].tolist()  # Преобразуем столбец в список
         with ThreadPoolExecutor(max_workers=10) as executor:
             cleaned_texts = list(executor.map(preprocessor.clean_text, texts))
-        df['cleaned_text'] = cleaned_texts
-        print("Предобработка текста завершена и добавлена в 'cleaned_text'.")
+        df['clean_text'] = cleaned_texts
+        print("Предобработка текста завершена и добавлена в 'clean_text'.")
 
     # Проверка и создание столбца 'vectorized_text'
     if 'vectorized_text' not in df.columns:
-        df['vectorized_text'] = df['cleaned_text'].apply(lambda x: vectorizer.vectorize_text(x))
+        df['vectorized_text'] = df['clean_text'].apply(lambda x: vectorizer.vectorize_text(x))
         print("Векторизация текста завершена и добавлена в 'vectorized_text'.")
 
-    # Проверка и создание столбца 'sentiment'
-    if 'sentiment' not in df.columns:
-        df['sentiment'] = df['vectorized_text'].apply(lambda x: sentiment_analyzer.analyze(x))
+    vectorized_texts = df['vectorized_text'].tolist()  # Список векторизованных текстов
+
+     # Параллельная обработка для анализа тональности
+    if 'sentiment_score' not in df.columns:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            sentiments = list(executor.map(sentiment_analyzer.analyze, vectorized_texts))
+        df['sentiment_score'] = sentiments
         print("Анализ тональности завершен и добавлен в 'sentiment'.")
         # Если нужно получить названия классов вместо числовых меток
-        df['sentiment_label'] = df['sentiment'].replace(sentiment_analyzer.mapping) # мб убрать
+        df['sentiment'] = df['sentiment_score'].replace(sentiment_analyzer.mapping)
 
-    # Проверка и создание столбца 'keywords'
+    # Параллельная обработка для извлечения ключевых слов
     if 'keywords' not in df.columns:
-        df['keywords'] = df['vectorized_text'].apply(lambda x: keyword_extractor.match_review_to_themes(x))
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            keywords = list(executor.map(keyword_extractor.match_review_to_themes, vectorized_texts))
+        df['keywords'] = keywords
         print("Выделение ключевых слов завершено и добавлено в 'keywords'.")
 
+    df['review_hash'] = df['comment_text'].apply(md5)
 
-def export_to_csv(dataframe, filename='processed_reviews.csv'):
-    dataframe.to_csv(filename, index=False)
-    st.download_button(
-        label="Скачать CSV",
-        data=dataframe.to_csv(index=False).encode('utf-8'),
-        file_name=filename,
-        mime='text/csv'
-    )
+    st.session_state.analysis_done = True   
+
+def load_analyzed_reviews_to_db(db_host, db_name, db_user, db_password, values):
+    try:
+        with psycopg2.connect(
+            host=db_host,
+            database=db_name,
+            user=db_user,
+            password=db_password
+            ) as conn:
+            with conn.cursor() as cur: 
+                cur.execute('TRUNCATE TABLE "buffer"."azs_review_analysis" CASCADE')
+                insert_query = """
+                    INSERT INTO buffer.azs_review_analysis (
+                        review_hash, comment_text, clean_text, sentiment, sentiment_score, keywords
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                # Выполнение вставки данных
+                cur.executemany(insert_query, values)
+                cur.execute("select testing.fn_load_analyzed_reviews()")
+                
+    except Exception as e:
+        logging.warning(f"Error with connection or cursor: {e}" )
+
+def get_analyzed_reviews(db_host, db_name, db_user, db_password):
+    try:
+        with psycopg2.connect(
+            host=db_host,
+            database=db_name,
+            user=db_user,
+            password=db_password
+            ) as conn:
+            with conn.cursor() as cur: 
+                df = pd.read_sql_query("""select ai.object_id, ai.rating as azs_rating, address, region, profession_level_num, 
+                                            ar.rating as review_rating, ar.comment_text, ar.comment_time, sentiment, sentiment_score, keywords, clean_text
+                                            from testing.azs_info as ai 
+                                            join testing.azs_review as ar 
+                                            on ai.object_id = ar.object_id 
+                                            left join testing.azs_review_analysis as a 
+                                            on md5(ar.comment_text) = a.review_hash
+                                            where ar.date_of_pars = (select max(date_of_pars) from testing.azs_review)
+                                            order by ar.comment_time desc;""", conn) 
+                return df
+                
+    except Exception as e:
+        logging.warning(f"Error with connection or cursor: {e}" )
+        return pd.DataFrame()
+
+
 
 def main():
     st.title("Интеллектуальная система анализа отзывов")
-
-    option = st.radio(
-        "Выберите источник данных:",
-        ('Подключение к базе данных', 'Загрузка CSV-файла')
-    )
-
     # Используем сессию для хранения DataFrame
     if 'reviews_df' not in st.session_state:
         st.session_state.reviews_df = None
+    if 'analysis_done' not in st.session_state:
+        st.session_state.analysis_done = False   
+    if 'first_analysis_done' not in st.session_state:
+            st.session_state.first_analysis_done = False   
 
-    if option == 'Подключение к базе данных':
-        db_host, db_name, db_user, db_password = get_db_connection_params()
-        if st.button("Подключиться"):
-            st.session_state.reviews_df = get_reviews(db_host, db_name, db_user, db_password)
-            st.session_state.keywords = get_keywords(db_host, db_name, db_user, db_password)
+    st.subheader("Подключение к базе данных")
 
-    elif option == 'Загрузка CSV-файла':
-        uploaded_file = st.file_uploader("Выберите CSV-файл", type="csv")
-        if uploaded_file is not None:
-            st.session_state.reviews_df = pd.read_csv(uploaded_file)
-            with open("C:\\Users\\an23m\\course_work\\keywords.json", 'r', encoding='utf-8') as file:
-                st.session_state.keywords = json.load(file)
+    db_host, db_name, db_user, db_password = get_db_connection_params()
+    if st.button("Подключиться"):
+        try:
+            st.session_state.reviews_df = get_unprocessed_reviews(db_host, db_name, db_user, db_password)
+            st.session_state.first_analysis_done = True
+        except Exception as e:
+            st.error(f"Ошибка при подключении к базе данных: {str(e)}")  
     # Проверка, что данные успешно загружены
-    if st.session_state.reviews_df is not None:
-        st.subheader("Все отзывы")
+    if st.session_state.reviews_df is not None and not st.session_state.reviews_df.empty and st.session_state.db_connection:
+        # выводить следующее только если в reviews_df что то лежит
+        st.session_state.first_analysis_done = False
+        st.subheader("Необработанные отзывы")
         st.dataframe(st.session_state.reviews_df)
-
-        preprocessor = Preprocessor(stop_words) # ,abbreviations
-        vectorizer = Vectorizer(combined_vectors_array)
-        sentiment_analyzer = SentimentAnalyzer(sentiment_model)
-        # Проверка, создан ли уже keyword_extractor
-        if 'keyword_extractor' not in st.session_state:
-            st.session_state.keyword_extractor = KeywordExtractor(
-                st.session_state.keywords,
-                combined_vectors_array,
-                preprocessor,
-                vectorizer
-            )
-        if 'analysis_done' not in st.session_state:
-            st.session_state.analysis_done = False    
-                # Кнопка для анализа всех отзывов
-        if st.button("Анализировать все отзывы"):
+        # Кнопка для анализа всех отзывов
+        if st.button("Анализировать необработанные отзывы"):
+            preprocessor = Preprocessor(stop_words) # ,abbreviations
+            vectorizer = Vectorizer(combined_vectors_array)
+            sentiment_analyzer = SentimentAnalyzer(sentiment_model)
+            # Проверка, создан ли уже keyword_extractor
+            st.session_state.keywords = get_keywords(db_host, db_name, db_user, db_password)
+            if 'keyword_extractor' not in st.session_state:
+                st.session_state.keyword_extractor = KeywordExtractor(
+                    st.session_state.keywords,
+                    combined_vectors_array,
+                    preprocessor,
+                    vectorizer
+                )
             # Инициализация классов
-            with st.spinner("Идет анализ отзывов..."): # сделать прогрес бар: предобработка, векторизация, тональность, ключевые слова
+            with st.spinner("Идет анализ отзывов..."): 
                 start_time = time.time()  # Запись времени начала
-                analyze_reviews(st.session_state.reviews_df, preprocessor, vectorizer, sentiment_analyzer, st.session_state.keyword_extractor)  # Ваш анализ здесь
+                analyze_reviews(st.session_state.reviews_df, preprocessor, vectorizer, sentiment_analyzer, st.session_state.keyword_extractor)  # анализ здесь
                 end_time = time.time()
                 st.text(f'Время выполнения: {end_time-start_time} секунд')
-            st.session_state.analysis_done = True
-
+        
         if st.session_state.analysis_done:
-        # Отображение результатов анализа
-            st.subheader("Результаты анализа")
-            st.dataframe(st.session_state.reviews_df.head(100))
-            # ВЕРНУТЬ st.dataframe(st.session_state.reviews_df[['comment_text', 'cleaned_text', 'sentiment', 'keywords']].head(100)) # 100 чтобы сильно не нагружать память, основной анализ по визуализации будет показан
-            # Экспорт в CSV
-            export_to_csv(st.session_state.reviews_df)   
-            with st.expander("Посмотреть графики", expanded=False):
-                if st.button("Облако слов"):
-                    # positive_reviews = ' '.join(st.session_state.reviews_df[st.session_state.reviews_df['sentiment'] == 2]['cleaned_text'])
-                    positive_reviews = ' '.join(
-                    [' '.join(tokens) for tokens in st.session_state.reviews_df[st.session_state.reviews_df['sentiment'] == 2]['cleaned_text']]
-                )
-                    wordcloud = WordCloud(width=800, height=400, background_color='white').generate(positive_reviews)
-
-                    # Отображаем облако слов
-                    plt.figure(figsize=(10, 5))
-                    plt.imshow(wordcloud, interpolation='bilinear')
-                    plt.axis("off")
-                    plt.title("Облако слов для положительных отзывов")
-                    st.pyplot(plt)
-
-                    # negative_reviews = ' '.join(st.session_state.reviews_df[st.session_state.reviews_df['sentiment'] == 0]['cleaned_text'])
-                    # wordcloud = WordCloud(width=800, height=400, background_color='white').generate(negative_reviews)
-
-                    # # Отображаем облако слов
-                    # plt.figure(figsize=(10, 5))
-                    # plt.imshow(wordcloud, interpolation='bilinear')
-                    # plt.axis("off")
-                    # plt.title("Облако слов для негативных отзывов")
-                    # st.pyplot(plt)
-
-                if st.button("Гистограмма тональности"):
-                    plt.figure(figsize=(8, 5))
-                    sns.countplot(data=st.session_state.reviews_df, x='sentiment', palette='Set2')
-                    plt.title('Распределение тональности отзывов')
-                    plt.xlabel('Тональность')
-                    plt.ylabel('Количество')
-                    st.pyplot(plt)
-
-                if st.button("Частотное распределение тональности по категориям"):
-                    # Разворачиваем колонку keywords, чтобы каждая категория была в отдельной строке
-                    exploded_df = st.session_state.reviews_df.explode('keywords')
-                    sentiment_distribution = exploded_df.groupby(['keywords', 'sentiment']).size().unstack(fill_value=0)
-                     # учесть что в keywords лежит список, может быть несколько слов
-                    sentiment_distribution.plot(kind='bar', stacked=True, figsize=(10, 6))
-                    plt.title('Распределение отзывов по категориям и тональности')
-                    plt.xlabel('Категория')
-                    plt.ylabel('Количество отзывов')
-                    plt.xticks(rotation=45)
-                    plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
-                    plt.tight_layout()
-                    st.pyplot(plt)
-
-    # можно например добавить результаты о том какое количество положительных и отрицательных отзывов для каждой азс. какие категории наилучшие и наихудшие для каждой азс.
-
-                if st.button("Распределение тональности по регионам"):
-                    plt.figure(figsize=(10, 6))
-                    sns.countplot(data=st.session_state.reviews_df, x='region', hue='sentiment', palette='coolwarm')
-                    plt.title("Распределение тональности по регионам")
-                    plt.xlabel("Регион")
-                    plt.ylabel("Количество отзывов")
-                    st.pyplot(plt)
-
-
-                # review_counts с информацией о количестве отзывов и проценте негативных отзывов для каждой АЗС
-
-                review_counts = st.session_state.reviews_df.groupby('object_id').agg(
-                total_reviews=('sentiment', 'size'),
-                negative_reviews=('sentiment', lambda x: (x == 0).sum()),
-                neutral_reviews=('sentiment', lambda x: (x == 1).sum()),
-                positive_reviews=('sentiment', lambda x: (x == 2).sum()),
-                ).reset_index()
-
-                # Вычисляем процент отзывов для каждой АЗС
-                review_counts['negative_ratio'] = review_counts['negative_reviews'] / review_counts['total_reviews'] * 100
-                review_counts['neutral_ratio'] = review_counts['neutral_reviews'] / review_counts['total_reviews'] * 100
-                review_counts['positive_ratio'] = review_counts['positive_reviews'] / review_counts['total_reviews'] * 100
-
-                if st.button("Список АЗС с наибольшим количеством негативных отзывов"):
-                    # Сортируем по проценту негативных отзывов в порядке убывания
-                    top_negative = review_counts.sort_values(by='negative_ratio', ascending=False).head(20).reset_index()
-                    plt.figure(figsize=(10, 6))
-                    sns.barplot(data=top_negative, x='object_id', y='negative_ratio', palette='Reds')
-                    plt.title("Топ-20 АЗС с наибольшим процентом негативных отзывов")
-                    plt.xlabel("АЗС ID")
-                    plt.ylabel("Процент негативных отзывов")
-                    st.pyplot(plt)
-
-                if st.button("Анализ ключевых проблемных категорий для каждой из проблемных АЗС"):
-                    # Фильтрация негативных отзывов и группировка по АЗС и категориям
-                    exploded_df = st.session_state.reviews_df.explode('keywords')
-                    negative_reviews = exploded_df[exploded_df['sentiment'] == 0]
-                    category_counts = negative_reviews.groupby(['object_id', 'keywords']).size().unstack().fillna(0) 
-# учесть что в keywords лежит список, может быть несколько слов
-                    # Отображение данных для анализа
-                    top_negative = review_counts.sort_values(by='negative_ratio', ascending=False).head(20).reset_index()
-                    st.write("Категории с наибольшим количеством негативных отзывов для топ-10 АЗС:")
-                    st.write(category_counts.loc[top_negative['object_id']])
+            st.subheader("Обработанные отзывы")
+            st.dataframe(st.session_state.reviews_df)
+            if st.button("Обновить БД"):
+                values = [(row['review_hash'], 
+                    row['comment_text'], 
+                    row['clean_text'], 
+                    row['sentiment'], 
+                    row['sentiment_score'], 
+                    parse_string_to_list(row['keywords'])) 
+                    for index, row in st.session_state.reviews_df.iterrows()]
+                load_analyzed_reviews_to_db(db_host, db_name, db_user, db_password, values)
+                st.success('Успешно обновлено')
+                st.session_state.first_analysis_done = True
                 
-                # добавить что-то с временными рядами ? 
+    # if st.session_state.reviews_df is not None and st.session_state.reviews_df.empty and st.session_state.first_analysis_done: 
+    #     st.session_state.analysis_done = True    
 
+    if st.session_state.first_analysis_done and st.session_state.db_connection:
+    # Отображение результатов анализа
+        st.subheader("Результаты анализа")
+        if 'analyzed_reviews_df' not in st.session_state:
+            st.session_state.analyzed_reviews_df = None
+        st.session_state.analyzed_reviews_df = get_analyzed_reviews(db_host, db_name, db_user, db_password)
+        cropped_df = st.session_state.analyzed_reviews_df[['comment_time','comment_text', 'sentiment', 'keywords', 'address', 'azs_rating', ]]
+        st.dataframe(cropped_df.head(100)) 
+
+        # with st.expander("Посмотреть графики", expanded=True):
+        # Список для хранения всех графиков
+        if 'figures' not in st.session_state:
+            st.session_state.figures = []
+
+        st.subheader("Гистограмма тональности")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        # plt.figure(figsize=(10, 6))
+        sns.countplot(data=st.session_state.analyzed_reviews_df, x='sentiment_score', palette='Set2')
+        plt.title('Распределение тональности отзывов')
+        plt.xlabel('Тональность')
+        plt.ylabel('Количество')
+        st.pyplot(plt)
+
+        st.session_state.figures.append(fig) # для экспорта
+
+        st.subheader("Частотное распределение тональности по категориям")
+        # Разворачиваем колонку keywords, чтобы каждая категория была в отдельной строке
+        exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
+        sentiment_distribution = exploded_df.groupby(['keywords', 'sentiment_score']).size().unstack(fill_value=0)
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sentiment_distribution.plot(kind='bar', stacked=True, ax=ax)
+        ax.set_title('Распределение отзывов по категориям и тональности')
+        ax.set_xlabel('Категория')
+        ax.set_ylabel('Количество отзывов')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+        ax.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+        plt.tight_layout()
+        st.pyplot(plt) # мб поменять на fig
+
+        st.session_state.figures.append(fig)
+
+        st.subheader("Распределение отзывов по категориям и тональности в процентном соотношении")
+        sentiment_distribution_percent = sentiment_distribution.div(sentiment_distribution.sum(axis=1), axis=0) * 100
+
+        # Построение графика
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sentiment_distribution_percent.plot(kind='bar', stacked=True, ax=ax)
+        plt.title('Распределение отзывов по категориям и тональности в процентном соотношении')
+        plt.xlabel('Категория')
+        plt.ylabel('Процент отзывов')
+        plt.xticks(rotation=90)
+        plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+        plt.tight_layout()
+        st.pyplot(plt)
+
+        st.session_state.figures.append(fig)
+# можно например добавить результаты о том какое количество положительных и отрицательных отзывов для каждой азс. какие категории наилучшие и наихудшие для каждой азс.
+        
+        st.subheader("Распределение тональности по регионам")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.countplot(data=st.session_state.analyzed_reviews_df, x='region', hue='sentiment_score', palette='coolwarm')
+        plt.title("Распределение тональности по регионам")
+        plt.xlabel("Регион")
+        plt.xticks(rotation=90)
+        plt.ylabel("Количество отзывов")
+        st.pyplot(plt)
+        st.session_state.figures.append(fig)
+
+        st.subheader("Распределение тональности по регионам (в процентах)")
+        # Вычисляем количество отзывов по каждому региону и тональности
+        region_sentiment_counts = st.session_state.analyzed_reviews_df.groupby(['region', 'sentiment_score']).size().unstack(fill_value=0)
+
+        # Преобразуем количество в проценты для каждого региона
+        region_sentiment_percent = region_sentiment_counts.div(region_sentiment_counts.sum(axis=1), axis=0) * 100
+
+        # Сортируем регионы по проценту положительных отзывов (предполагаем, что положительная тональность = 1)
+        region_sentiment_percent = region_sentiment_percent.sort_values(by=0, ascending=False)
+
+        # Преобразуем данные для построения графика в нужном формате
+        region_sentiment_percent = region_sentiment_percent.reset_index().melt(id_vars='region', var_name='sentiment_score', value_name='percentage')
+
+        # Построение графика с процентами
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(data=region_sentiment_percent, x='region', y='percentage', hue='sentiment_score', palette='coolwarm')
+        plt.title("Распределение тональности по регионам (в процентах)")
+        plt.xlabel("Регион")
+        plt.ylabel("Процент отзывов")
+        plt.xticks(rotation=90)
+        # plt.legend(title='Тональность', labels=['Отрицательная', 'Нейтральная', 'Положительная'])
+        plt.tight_layout()
+        st.pyplot(plt)
+        st.session_state.figures.append(fig)
+
+        # review_counts с информацией о количестве отзывов и проценте негативных отзывов для каждой АЗС
+
+        review_counts = st.session_state.analyzed_reviews_df.groupby('object_id').agg(
+        total_reviews=('sentiment_score', 'size'),
+        negative_reviews=('sentiment_score', lambda x: (x == 0).sum()),
+        neutral_reviews=('sentiment_score', lambda x: (x == 1).sum()),
+        positive_reviews=('sentiment_score', lambda x: (x == 2).sum()),
+        ).reset_index()
+
+        # Фильтруем только те АЗС, где общее количество отзывов больше или равно 20
+        review_counts = review_counts[review_counts['total_reviews'] >= 20]
+
+        # Вычисляем процент отзывов для каждой АЗС
+        review_counts['negative_ratio'] = review_counts['negative_reviews'] / review_counts['total_reviews'] * 100
+        review_counts['neutral_ratio'] = review_counts['neutral_reviews'] / review_counts['total_reviews'] * 100
+        review_counts['positive_ratio'] = review_counts['positive_reviews'] / review_counts['total_reviews'] * 100
+
+
+        st.subheader("Список АЗС с наибольшим количеством негативных отзывов")
+        # Сортируем по проценту негативных отзывов в порядке убывания
+        top_negative = review_counts.sort_values(by='negative_ratio', ascending=False).head(20).reset_index()
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(data=top_negative, x='object_id', y='negative_ratio', order=top_negative['object_id'])
+        plt.title("Топ-20 АЗС с наибольшим процентом негативных отзывов")
+        plt.xlabel("АЗС ID")
+        plt.xticks(rotation=90)
+        plt.ylabel("Процент негативных отзывов")
+        st.pyplot(plt)
+        st.session_state.figures.append(fig)
+        st.text(top_negative)
+
+        # Получаем отзывы с негативным sentiment_score
+        exploded_df = st.session_state.analyzed_reviews_df.explode('keywords')
+        negative_reviews = exploded_df[exploded_df['sentiment_score'] == 0]
+
+        # Группируем по 'object_id' и 'keywords', чтобы посчитать количество негативных отзывов по категориям
+        category_counts = negative_reviews.groupby(['object_id', 'keywords']).size().unstack().fillna(0)
+
+        # Фильтруем category_counts по top_negative, чтобы оставить только те АЗС, которые есть в top_negative
+        filtered_category_counts = category_counts.loc[category_counts.index.isin(top_negative['object_id'])]
+
+        # Строим тепловую карту
+        fig, ax = plt.subplots(figsize=(12, 8))
+        sns.heatmap(filtered_category_counts, annot=True, cmap='Reds', fmt='g', linewidths=0.5)
+        plt.title("Тепловая карта: Негативные отзывы по категориям для топ-20 АЗС")
+        plt.xlabel("Категория")
+        plt.ylabel("АЗС ID")
+        plt.xticks(rotation=90)
+        plt.tight_layout()
+        st.pyplot(plt)
+        st.session_state.figures.append(fig)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_filename = f"reports\\review_report_{timestamp}.pdf"
+        with PdfPages(pdf_filename) as pdf:
+            for figure in st.session_state.figures:
+                pdf.savefig(figure)  # Сохраняем каждый график
+        
+        
+        with open(pdf_filename, "rb") as file:
+            st.download_button(label="Скачать PDF", data=file, file_name=pdf_filename, mime="application/pdf")
 
 if __name__ == "__main__":
     main()
             
-            # сделать requierements file
 
+# st.subheader("Облако слов")
+            
+# positive_reviews = ' '.join(st.session_state.analyzed_reviews_df[st.session_state.analyzed_reviews_df['sentiment_score'] == 2]['clean_text']).replace('[','').replace("'",'').replace(',','').replace(']','')
+# wordcloud = WordCloud(width=800, height=400, background_color='white').generate(positive_reviews)
+
+# plt.figure(figsize=(10, 5))
+# plt.imshow(wordcloud, interpolation='bilinear')
+# plt.axis("off")
+# plt.title("Облако слов для положительных отзывов")
+# st.pyplot(plt)
+
+# negative_reviews = ' '.join(st.session_state.analyzed_reviews_df[st.session_state.analyzed_reviews_df['sentiment_score'] == 0]['clean_text']).replace('[','').replace("'",'').replace(',','').replace(']','')
+# wordcloud = WordCloud(width=800, height=400, background_color='white').generate(negative_reviews)
+
+# plt.figure(figsize=(10, 5))
+# plt.imshow(wordcloud, interpolation='bilinear')
+# plt.axis("off")
+# plt.title("Облако слов для негативных отзывов")
+# st.pyplot(plt)
 
 # def analyze_sentiment_by_azs(reviews_df):
 #     # Группируем по АЗС и тональности
@@ -313,17 +474,17 @@ if __name__ == "__main__":
 #     if st.button("Анализировать все отзывы"):
 #         # Инициализация классов
 #         with st.spinner("Идет анализ отзывов..."):
-#             analyze_reviews(st.session_state.reviews_df, preprocessor, vectorizer, sentiment_analyzer, st.session_state.keyword_extractor)
+#             analyze_reviews(st.session_state.analyzed_reviews_df, preprocessor, vectorizer, sentiment_analyzer, st.session_state.keyword_extractor)
 #             st.session_state.analysis_done = True
 
 #     # Отображение результатов анализа
 #     if st.session_state.analysis_done:
 #         st.subheader("Результаты анализа")
-#         st.dataframe(st.session_state.reviews_df[['comment_text', 'cleaned_text', 'sentiment', 'keywords']].head(100))
+#         st.dataframe(st.session_state.analyzed_reviews_df[['comment_text', 'cleaned_text', 'sentiment', 'keywords']].head(100))
 
 #         # Анализ отзывов по АЗС
-#         sentiment_counts = analyze_sentiment_by_azs(st.session_state.reviews_df)
-#         best_worst_categories, category_sentiment_counts = analyze_best_worst_categories(st.session_state.reviews_df)
+#         sentiment_counts = analyze_sentiment_by_azs(st.session_state.analyzed_reviews_df)
+#         best_worst_categories, category_sentiment_counts = analyze_best_worst_categories(st.session_state.analyzed_reviews_df)
 
 #         st.subheader("Количество положительных и отрицательных отзывов по АЗС")
 #         st.dataframe(sentiment_counts)
