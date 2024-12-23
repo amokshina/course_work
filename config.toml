@@ -18,7 +18,7 @@ in_file = "objectIds_2024-09-22_22-08.json"
 
 [db_params]
 user = "postgres"
-password = "f8ysz789"
+password = ""
 database = "azs"
 host = "localhost"
 port = "5432"
