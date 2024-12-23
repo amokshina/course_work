@@ -55,7 +55,7 @@ def get_db_connection_params():
     db_host = st.text_input("Хост базы данных", "localhost")
     db_name = st.text_input("Имя базы данных", "azs")
     db_user = st.text_input("Пользователь базы данных", "postgres")
-    db_password = st.text_input("Пароль базы данных", "f8ysz789", type="password")
+    db_password = st.text_input("Пароль базы данных", "", type="password")
     return db_host, db_name, db_user, db_password
 
 
